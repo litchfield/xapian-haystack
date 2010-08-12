@@ -299,7 +299,7 @@ class SearchBackend(BaseSearchBackend):
     def search(self, query, sort_by=None, start_offset=0, end_offset=None,
                fields='', highlight=False, facets=None, date_facets=None,
                query_facets=None, narrow_queries=None, spelling_query=None,
-               limit_to_registered_models=True, **kwargs):
+               limit_to_registered_models=True, count_only=False, **kwargs):
         """
         Executes the Xapian::query as defined in `query`.
         
@@ -392,11 +392,14 @@ class SearchBackend(BaseSearchBackend):
             'queries': {},
         }
         
-        if not end_offset:
+        if count_only:
+            end_offset = 0
+        elif not end_offset:
             end_offset = database.get_doccount() - start_offset
-        
         matches = self._get_enquire_mset(database, enquire, start_offset, end_offset)
-        
+        if count_only:
+            return matches.get_matches_estimated()
+
         for match in matches:
             app_label, module_name, pk, model_data = pickle.loads(self._get_document_data(database, match.document))
             if highlight:
@@ -1159,6 +1162,30 @@ class SearchQuery(BaseSearchQuery):
         else:
             return xapian.Query(xapian.Query.OP_PHRASE, term_list)
 
+    def run_count(self):
+        """Builds and executes the query. Returns estimated count only."""
+        final_query = self.build_query()
+        kwargs = self.build_params()
+        self._hit_count = self.backend.search(final_query, count_only=True, **kwargs)
+    
+    def get_count(self):
+        """
+        Returns the number of results the backend found for the query.
+        
+        If the query has not been run, this will execute the query and store
+        the results.
+        """
+        if self._hit_count is None:
+            if self._more_like_this:
+                # Special case for MLT.
+                self.run_mlt()
+            elif self._raw_query:
+                # Special case for raw queries.
+                self.run_raw()
+            else:
+                self.run_count()
+        
+        return self._hit_count
 
 def _marshal_value(value):
     """
